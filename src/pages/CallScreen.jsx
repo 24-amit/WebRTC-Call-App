@@ -23,6 +23,13 @@ export default function CallScreen() {
   const [callId, setCallId] = useState(callIdFromRoute || "");
   const [muted, setMuted] = useState(false);
   const [speaker, setSpeaker] = useState(false);
+  const [connectedAt, setConnectedAt] = useState(null);
+  const [elapsed, setElapsed] = useState("00:00");
+
+  const pcRef = useRef(null);
+  const localAudioRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  const localStreamRef = useRef(null);
 
   const statusLabel = (s) => {
     switch (s) {
@@ -36,25 +43,29 @@ export default function CallScreen() {
         return "Ended";
       case "failed":
         return "Failed";
+      case "answering":
+        return "Answering";
       default:
         return s || "Initializing";
     }
   };
-  const [connectedAt, setConnectedAt] = useState(null);
-  const [elapsed, setElapsed] = useState("00:00");
 
-  const pcRef = useRef(null);
-  const localAudioRef = useRef(null);
-  const remoteAudioRef = useRef(null);
-  const localStreamRef = useRef(null);
-
+  // Create peer connection and ontrack handler (audio only)
   useEffect(() => {
     const pc = createPeer();
     pcRef.current = pc;
+
     registerPeerConnectionListeners(pc, (cs) => setStatus(cs));
-    pc.ontrack = (e) => {
-      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = e.streams;
+
+    pc.ontrack = (event) => {
+      const [remoteStream] = event.streams;
+      if (remoteAudioRef.current && remoteStream instanceof MediaStream) {
+        remoteAudioRef.current.srcObject = remoteStream;
+      } else {
+        console.warn("No MediaStream in ontrack", event.streams);
+      }
     };
+
     return () => {
       pc.getSenders?.().forEach((s) => s.track?.stop());
       pc.close?.();
@@ -62,9 +73,11 @@ export default function CallScreen() {
     };
   }, []);
 
+  // Track connection state to start timer and mark failures
   useEffect(() => {
     const pc = pcRef.current;
     if (!pc) return;
+
     const onChange = () => {
       if (pc.connectionState === "connected" && !connectedAt) {
         setStatus("connected");
@@ -74,10 +87,12 @@ export default function CallScreen() {
         setStatus((prev) => (prev === "ended" ? prev : "failed"));
       }
     };
+
     pc.addEventListener?.("connectionstatechange", onChange);
     return () => pc.removeEventListener?.("connectionstatechange", onChange);
   }, [connectedAt]);
 
+  // Start caller or receiver, set up Firestore listener
   useEffect(() => {
     const run = async () => {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -85,8 +100,15 @@ export default function CallScreen() {
         video: false,
       });
       localStreamRef.current = stream;
-      if (localAudioRef.current) localAudioRef.current.srcObject = stream;
+
+      if (localAudioRef.current) {
+        localAudioRef.current.srcObject = stream;
+      }
+
+      let activeCallId = callIdFromRoute || callId;
+
       if (callIdFromRoute) {
+        // Answering an incoming call
         setStatus("answering");
         await startReceiver({
           pc: pcRef.current,
@@ -94,12 +116,12 @@ export default function CallScreen() {
           callId: callIdFromRoute,
         });
       } else {
+        // Starting an outgoing call
         setStatus("ringing");
 
-        let ringTimeout;
-        ringTimeout = setTimeout(async () => {
+        const timeoutId = setTimeout(async () => {
           if (status === "ringing" || status === "connecting") {
-            await endCall(callId || callIdFromRoute);
+            await endCall(activeCallId);
             setStatus("ended");
             await addDoc(collection(db, "history"), {
               owner: auth.currentUser?.phoneNumber,
@@ -112,24 +134,31 @@ export default function CallScreen() {
           }
         }, 30000);
 
-        const { callId: id } = await startCaller({
+        const { callId: newId } = await startCaller({
           pc: pcRef.current,
           localStream: stream,
           calleeNumber: callee,
           currentUserNumber: auth.currentUser?.phoneNumber,
         });
-        setCallId(id);
+
+        activeCallId = newId;
+        setCallId(newId);
+
+        // optional: you could clearTimeout(timeoutId) when status becomes "connected"
       }
-      //   const id = callIdFromRoute || callId;
-      if (id)
-        onSnapshot(doc(db, "calls", id), (snap) => {
+
+      if (activeCallId) {
+        onSnapshot(doc(db, "calls", activeCallId), (snap) => {
           const data = snap.data();
           if (data?.status) setStatus(data.status);
         });
+      }
     };
-    run().catch(() => setStatus("failed"));
-  }, [callIdFromRoute, callee]);
 
+    run().catch(() => setStatus("failed"));
+  }, [callIdFromRoute, callee, callId, status, navigate]);
+
+  // Call duration timer
   useEffect(() => {
     if (!connectedAt) return;
     const id = setInterval(() => {
@@ -169,9 +198,8 @@ export default function CallScreen() {
       <div className="call-info">
         <div className="number">{callee || "Unknown"}</div>
         <div className="status">
-          {" "}
           {statusLabel(status)}
-          {status === "connected" ? ` - ${elapsed}` : ""}{" "}
+          {status === "connected" ? ` - ${elapsed}` : ""}
         </div>
       </div>
       <div className="controls">
