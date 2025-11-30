@@ -1,20 +1,26 @@
 import { db, collection, doc, setDoc, onSnapshot, updateDoc, getDoc, addDoc, serverTimestamp } from "./firebase";
 
-export const createPeer = () => new RTCPeerConnection({
-    iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:global.stun.twilio.com:3478"] }]
-});
+export function createPeer() {
+    const pc = new RTCPeerConnection(iceConfig);
+    // NO addTrack / addTransceiver here
+    return pc;
+}
 
 export const registerPeerConnectionListeners = (pc, onConnectionState) => {
     pc.onconnectionstatechange = () => onConnectionState?.(pc.connectionState);
 };
 
 export const startCaller = async ({ pc, localStream, calleeNumber, currentUserNumber }) => {
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    // localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    localStream.getAudioTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
+    });
     const callDoc = doc(collection(db, "calls"));
     const offerCandidates = collection(callDoc, "offerCandidates");
     const answerCandidates = collection(callDoc, "answerCandidates");
     pc.onicecandidate = async e => { if (e.candidate) await addDoc(offerCandidates, e.candidate.toJSON()); };
-    const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+    // const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+    const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await setDoc(callDoc, {
         from: currentUserNumber, to: calleeNumber,
@@ -38,7 +44,11 @@ export const startCaller = async ({ pc, localStream, calleeNumber, currentUserNu
 };
 
 export const startReceiver = async ({ pc, localStream, callId }) => {
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    // localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    localStream.getAudioTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
+    });
+
     const callDoc = doc(db, "calls", callId);
     const offerCandidates = collection(callDoc, "offerCandidates");
     const answerCandidates = collection(callDoc, "answerCandidates");
