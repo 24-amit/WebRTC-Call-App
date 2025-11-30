@@ -24,12 +24,14 @@ const ensureIndiaFormat = (raw) => {
 
 const normalizePhone = (raw) => {
   const digits = (raw || "").replace(/\D/g, "");
-  if (!digits) return "";
-  // India-only: always +91
-  if (digits.length === 10) return `+91${digits}`;
-  if (digits.startsWith("91") && digits.length === 12) return `+${digits}`;
-  if (digits.startsWith("+")) return digits;
-  return `+${digits}`;
+
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+  if (raw.startsWith("+91") && digits.length === 12) {
+    return `+91${digits.slice(-10)}`;
+  }
+  return "";
 };
 
 const formatPhone = (s) => s.replace(/\D/g, "").slice(0, 15);
@@ -64,15 +66,21 @@ export default function Dialer() {
 
   const dial = async () => {
     const rawInput = input.trim();
+    const num = normalizePhone(rawInput);
 
-    // Validate: exactly 10 digits or full +91XXXXXXXXXX
-    const digits = rawInput.replace(/\D/g, "");
-    if (digits.length !== 10) {
-      alert("Enter exactly 10 digits");
+    if (!num) {
+      alert("Enter a valid 10-digit Indian number");
       return;
     }
 
-    const num = ensureIndiaFormat(rawInput);
+    // Validate: exactly 10 digits or full +91XXXXXXXXXX
+    // const digits = rawInput.replace(/\D/g, "");
+    // if (digits.length !== 10) {
+    //   alert("Enter exactly 10 digits");
+    //   return;
+    // }
+
+    // const num = ensureIndiaFormat(rawInput);
 
     // Check presence only now
     const onlineNow = await isOnline(num);
@@ -144,12 +152,12 @@ export default function Dialer() {
         <div className="phone-input">
           <span>+91</span>
           <input
-            value={input.slice(3)} // show only 10 digits
+            value={input.slice(3)}
             onChange={(e) =>
-              setInput(`+91${e.target.value.replace(/\D/g, "")}`)
+              setInput(`+91${e.target.value.replace(/\D/g, "").slice(0, 10)}`)
             }
             placeholder="XXXXXXXXXX"
-            maxLength="10"
+            maxLength={10}
           />
         </div>
         <div className="grid">
